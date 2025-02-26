@@ -1,0 +1,103 @@
+#library(utils)
+#rforge <- "http://r-forge.r-project.org"
+#install.packages("estimate", repos=rforge, dependencies=TRUE)
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("limma")
+
+
+#引用包
+library(limma)
+library(estimate)
+
+inputFile="symbol.txt"      #表达数据文件
+setwd("C:\\Users\\DELL\\Desktop\\estimate")     #设置工作目录
+
+#读取表达数据文件,并对输入文件整理
+rt=read.table(inputFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp), colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)), nrow=nrow(exp), dimnames=dimnames)
+data=avereps(data)
+
+#删除正常样品
+#group=sapply(strsplit(colnames(data),"\\-"), "[", 4)
+#group=sapply(strsplit(group,""), "[", 1)
+#group=gsub("2", "1", group)
+#data=data[,group==0]
+#out=data[rowMeans(data)>0,]
+
+#输出整理好的表达数据
+out=rbind(ID=colnames(data), data)
+write.table(out,file="uniq.symbol.txt",sep="\t",quote=F,col.names=F)
+
+#运行estimate包
+filterCommonGenes(input.f="uniq.symbol.txt", 
+                  output.f="commonGenes.gct", 
+                  id="GeneSymbol")
+
+estimateScore(input.ds = "commonGenes.gct",
+              output.ds="estimateScore.gct", 
+              platform="illumina")
+
+#输出每个样品的肿瘤微环境打分
+scores=read.table("estimateScore.gct", skip=2, header=T)
+rownames(scores)=scores[,1]
+scores=t(scores[,3:ncol(scores)])
+rownames(scores)=gsub("\\.", "\\-", rownames(scores))
+out=rbind(ID=colnames(scores), scores)
+write.table(out, file="TMEscores.txt", sep="\t", quote=F, col.names=F)
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("limma")
+
+#install.packages("ggpubr")
+
+
+#引用包
+library(limma)
+library(ggpubr)
+scoreFile="TMEscores.txt"     #肿瘤微环境的打分文件
+riskFile="risk.all.txt"       #风险文件
+setwd("C:\\Users\\DELL\\Desktop\\estimate")     #设置工作目录
+
+#读取肿瘤微环境打分文件，并对文件进行整理
+rt=read.table(scoreFile, header=T, sep="\t", check.names=F, row.names=1)
+data=as.matrix(rt)
+rownames(data)=gsub("(.*?)\\-(.*?)\\-(.*?)\\-(.*?)\\-.*", "\\1\\-\\2\\-\\3", rownames(data))
+data=avereps(data)
+
+#读取风险文件
+risk=read.table(riskFile, header=T, sep="\t", check.names=F, row.names=1)
+
+#合并数据
+sameSample=intersect(row.names(data), row.names(risk))
+data=data[sameSample,,drop=F]
+risk=risk[sameSample,"risk",drop=F]
+rt=cbind(data, risk)
+
+#设置比较组
+rt$risk=factor(rt$risk, levels=c("C1", "C2"))
+group=levels(factor(rt$risk))
+rt$risk=factor(rt$risk, levels=group)
+comp=combn(group,2)
+my_comparisons=list()
+for(i in 1:ncol(comp)){my_comparisons[[i]]<-comp[,i]}
+
+#对肿瘤微环境的打分进行循环,绘制箱线图
+for(i in colnames(rt)[1:3]){
+  boxplot=ggboxplot(rt, x="risk", y=i, fill="risk",
+                    xlab="",
+                    ylab=i,
+                    legend.title="Cluster",
+                    palette=c("#008B45FF","#EE0000FF")
+  )+ 
+    stat_compare_means(comparisons=my_comparisons)
+  
+  #输出图形
+  pdf(file=paste0(i, ".pdf"), width=5, height=4.5)
+  print(boxplot)
+  dev.off()
+}
