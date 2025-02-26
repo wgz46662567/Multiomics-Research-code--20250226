@@ -1,0 +1,69 @@
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("limma")
+
+#install.packages("ggpubr")
+#install.packages("reshape2")
+
+
+#引用包
+library(limma)
+library(ggpubr)
+library(reshape2)
+
+riskFile="risk.all.txt"        #风险文件
+scoreFile="ssgseaOut1.txt"      #ssGSEA的打分文件
+setwd("C:\\Users\\DELL\\Desktop\\ssgsea")      #设置工作目录
+
+#读取ssGSEA结果文件，并对数据进行整理
+data=read.table(scoreFile, header=T, sep="\t", check.names=F, row.names=1)
+#去除正常样品
+#group=sapply(strsplit(colnames(data),"\\-"), "[", 4)
+#group=sapply(strsplit(group,""), "[", 1)
+#group=gsub("2", "1", group)
+#data=data[,group==0,drop=F]
+#colnames(data)=gsub("(.*?)\\-(.*?)\\-(.*?)\\-(.*?)\\-.*", "\\1\\-\\2\\-\\3", colnames(data))
+#data=avereps(t(data))
+
+#读取风险文件
+risk=read.table(riskFile, header=T, sep="\t", check.names=F, row.names=1)
+
+#合并数据
+sameSample=intersect(row.names(data),row.names(risk))
+data=data[sameSample,]
+risk=risk[sameSample,]
+rt=cbind(data,risk)
+rt=rt[,-(ncol(rt)-1)]
+
+#绘制免疫细胞的箱线图
+immCell=c("B_cells","Macrophages","Neutrophils","pDCs",
+          "Th1_cells","Th2_cells","TIL","Treg")
+rt1=rt[,c(immCell,"risk")]
+data=melt(rt1,id.vars=c("risk"))
+colnames(data)=c("Risk","Type","Score")
+data$Risk=factor(data$Risk, levels=c("C1","C2"))
+p=ggboxplot(data, x="Type", y="Score", fill = "Risk",
+            notch=T, outlier.shape = NA,
+            xlab="",ylab="Score",add = "none",palette = c("#008B45FF","#EE0000FF") )
+p=p+rotate_x_text(50)
+#输出图形
+pdf(file="immCell.boxplot.pdf", width=7, height=6)
+p+stat_compare_means(aes(group=Risk),symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", "")),label = "p.signif")
+dev.off()
+
+#对免疫相关功能绘制箱线图
+immFunction=c("APC_co_stimulation","CCR","HLA","Inflammation-promoting",
+              "Parainflammation","T_cell_co-inhibition",
+              "T_cell_co-stimulation","Type_I_IFN_Reponse")
+rt1=rt[,c(immFunction,"risk")]
+data=melt(rt1,id.vars=c("risk"))
+colnames(data)=c("Risk","Type","Score")
+data$Risk=factor(data$Risk, levels=c("C1","C2"))
+p=ggboxplot(data, x="Type", y="Score", fill = "Risk",
+            notch=T, outlier.shape = NA,
+            xlab="",ylab="Score",add = "none",palette = c("#008B45FF","#EE0000FF") )
+p=p+rotate_x_text(50)
+#输出图形
+pdf(file="immFunction.boxplot.pdf",width=7,height=6)
+p+stat_compare_means(aes(group=Risk),symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1), symbols = c("***", "**", "*", "")),label = "p.signif")
+dev.off()
