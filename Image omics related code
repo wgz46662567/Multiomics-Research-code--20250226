@@ -1,0 +1,392 @@
+#Feature extraction：
+import os
+import SimpleITK as sitk 
+import numpy as np
+import radiomics
+from radiomics import featureextractor
+import pandas as pd
+from tqdm import tqdm
+import re
+
+# 1) 使用配置文件初始化特征抽取器
+import radiomics
+from radiomics import featureextractor
+para_path = r'C:/Users/lenovo/Desktop/exampleCT.yaml' # 特征提取器配置文件
+extractor = featureextractor.RadiomicsFeatureExtractor(para_path) # 定义特征提取器
+
+# 2) 遍历不同的数据样本
+dataset_dir = r"C:/Users/lenovo/Desktop/CT" # 数据集路径
+samples_list = os.listdir(dataset_dir) # 数据集下所有的样本名列表
+
+# 初始化一个列表，用于记录错误的数据样本
+error_samples = [] 
+# 初始化一个空表格，用于记录数据集中每一个样本提取的影像特征
+dataset_result_df = pd.DataFrame([])
+# 遍历数据集中每一个数据样本
+for sample in tqdm(samples_list):
+    
+    # 1) 读取sitk Image对象
+    # 样本路径
+    sample_dir = os.path.join(dataset_dir,sample)
+    # 影像文件路径
+    image_filepath = os.path.join(sample_dir,'CT.nrrd')
+    # 标注掩膜文件路径
+    seg_filepath = os.path.join(sample_dir,'Segmentation.seg.nrrd')
+#     label_filepath = os.path.join(sample_dir,'Segmentation-label.nrrd')
+    
+    # 2）判断目标类型对应seg.nrrd文件中mask的通道序号
+    try:
+        # 读取文件
+        image_sitk = sitk.ReadImage(image_filepath)
+    except:
+        print("Skip error sample( Error while reading CT.nrrd reading ): %s"%sample) # 打印错误信息
+        continue
+        
+    try:
+        seg_sitk = sitk.ReadImage(seg_filepath)
+#         label_sitk = sitk.ReadImage(label_filepath) # 也可以用这个文件来提取影像特征
+    except:
+        print("Skip error sample( Error while reading Segmentation.seg.nrrd  ): %s"%sample)# 打印错误信息
+        continue
+    
+    # 3）提取特征并拼接到数据表中
+    # 由于原图有3个通道（3重复通道），只需要其中一个通道即可
+    try:
+        # 由于原图有3个通道（3重复通道），只需要其中一个通道即可
+#         component_image = sitk.VectorIndexSelectionCast(image_sitk, 0, sitk.sitkFloat32)
+        result = extractor.execute(image_sitk,seg_sitk)  #抽取特征,返回值是一个ordered dictionary
+            # 挑选有用的那些特征（即特征名称不包含diagnostics的）
+        pick_result = dict([])
+        for key, value in result.items():  #输出特征
+            if 'diagnostics' in key:
+                continue
+            else:
+                pick_result[key] = value
+        # 转为dataframe
+        sample_result_df = pd.DataFrame([pick_result],index=[sample])
+        # 合并
+        dataset_result_df = pd.concat([dataset_result_df,sample_result_df],axis=0)
+    except:
+        error_samples  += [sample]
+        print("Skip error sample( label error ): %s"%sample)
+        continue
+        
+    # 4) 保存为csv文件
+    save_dir = r"C:/Users/lenovo/Desktop/CT"
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    filepath = os.path.join(save_dir,'KIRC_CT_dataset.csv')
+dataset_result_df.to_csv( filepath )
+
+ 
+#Radiomics
+import os
+from IPython.display import display
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+from onekey_algo import OnekeyDS as okds
+from onekey_algo import get_param_in_cwd
+
+os.makedirs('img', exist_ok=True)
+os.makedirs('results', exist_ok=True)
+
+# 设置数据目录
+# mydir = r'你自己数据的路径'
+mydir = get_param_in_cwd('radio_dir') or okds.ct
+if mydir == okds.ct:
+    print(f'正在使用Onekey数据：{okds.ct}，如果不符合预期，请修改目录位置！')
+# 对应的标签文件
+# labelf = r'你自己标注数据的文件地址'
+labelf = os.path.join(mydir, 'label.csv')
+# 读取标签数据列名
+labels = [get_param_in_cwd('task_column') or 'label']
+# 删掉ID这一列。
+combined_data = pd.merge(rad_data, label_data, on=['ID'], how='inner')
+ids = combined_data['ID']
+combined_data = combined_data.drop(['ID'], axis=1)
+print(combined_data[labels].value_counts())
+combined_data.columns
+combined_data.describe()
+from onekey_algo.custom.components.comp1 import normalize_df
+data = normalize_df(combined_data, not_norm=labels)
+data = data.dropna(axis=1)
+data.describe()
+import seaborn as sns
+from onekey_algo.custom.components.stats import clinic_stats
+
+stats = clinic_stats(data, stats_columns=list(data.columns[0:-1]), label_column=labels[0], 
+                     continuous_columns=list(data.columns[0:-1]))
+stats
+import matplotlib.pyplot as plt
+
+def map2float(x):
+    try:
+        return float(str(x)[1:])
+    except:
+        return 1
+
+stats[['pvalue']] = stats[['pvalue']].applymap(map2float)
+stats[['group']] = stats[['feature_name']].applymap(lambda x: x.split('_')[-2])
+stats = stats[['feature_name', 'pvalue', 'group']]
+g = sns.catplot(x="group", y="pvalue", data=stats, kind="violin")
+g.fig.set_size_inches(15,10)
+sns.stripplot(x="group", y="pvalue", data=stats, ax=g.ax, color='black')
+plt.savefig(f'img/Rad_feature_stats.svg', bbox_inches = 'tight')
+pvalue = 0.05
+sel_feature = list(stats[stats['pvalue'] < pvalue]['feature_name']) + labels
+data = data[sel_feature]
+data
+
+pearson_corr = data[[c for c in data.columns if c not in labels]].corr('pearson')
+# kendall_corr = data.corr('kendall')
+# spearman_corr = data.corr('spearman')
+import seaborn as sns
+from onekey_algo.custom.components.comp1 import draw_matrix
+plt.figure(figsize=(50.0, 40.0))
+
+# 选择可视化的相关系数
+draw_matrix(pearson_corr, annot=True, cmap='YlGnBu', cbar=False)
+plt.savefig(f'img/Rad_feature_corr.svg', bbox_inches = 'tight')
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+pp = sns.clustermap(pearson_corr, linewidths=.5, figsize=(50.0, 40.0), cmap='YlGnBu')
+plt.setp(pp.ax_heatmap.get_yticklabels(), rotation=0)
+plt.savefig(f'img/Rad_feature_cluster.svg', bbox_inches = 'tight')
+from onekey_algo.custom.components.comp1 import select_feature
+sel_feature = select_feature(pearson_corr, threshold=0.9, topn=10, verbose=False)
+sel_feature += labels
+sel_feature
+sel_data = data[sel_feature]
+sel_data.describe()
+from onekey_algo.custom.components.comp1 import analysis_features
+analysis_features(sel_data, data[labels[0]], methods=None)
+import numpy as np
+import onekey_algo.custom.components as okcomp
+
+n_classes = 2
+y_data = sel_data[labels]
+X_data = sel_data.drop(labels, axis=1)
+column_names = X_data.columns
+
+# 如果使用get_bst_split,这个地方的划分不生效。
+X_train, X_test, y_train, y_test = okcomp.comp1.split_dataset(X_data, y_data, test_size=0.2, random_state=0)
+print(f"训练集样本数：{X_train.shape}, 验证集样本数：{X_test.shape}")
+alpha = okcomp.comp1.lasso_cv_coefs(X_data, y_data, column_names=None)
+plt.savefig(f'img/Rad_feature_lasso.svg', bbox_inches = 'tight')
+okcomp.comp1.lasso_cv_efficiency(X_data, y_data, points=50)
+plt.savefig(f'img/Rad_feature_mse.svg', bbox_inches = 'tight')
+from sklearn import linear_model
+
+models = []
+for label in labels:
+    clf = linear_model.Lasso(alpha=alpha)
+    clf.fit(X_data, y_data[label])
+    models.append(clf)
+COEF_THRESHOLD = 1e-6 # 筛选的特征阈值
+scores = []
+selected_features = []
+for label, model in zip(labels, models):
+    feat_coef = [(feat_name, coef) for feat_name, coef in zip(column_names, model.coef_) 
+                 if COEF_THRESHOLD is None or abs(coef) > COEF_THRESHOLD]
+    selected_features.append([feat for feat, _ in feat_coef])
+    formula = ' '.join([f"{coef:+.6f} * {feat_name}" for feat_name, coef in feat_coef])
+    score = f"{label} = {model.intercept_} {'+' if formula[0] != '-' else ''} {formula}"
+    scores.append(score)
+    
+print(scores[0])
+feat_coef = sorted(feat_coef, key=lambda x: x[1])
+feat_coef_df = pd.DataFrame(feat_coef, columns=['feature_name', 'Coefficients'])
+feat_coef_df.plot(x='feature_name', y='Coefficients', kind='barh')
+
+plt.savefig(f'img/Rad_feature_weights.svg', bbox_inches = 'tight')
+X_data = X_data[selected_features[0]]
+X_data.columns
+model_names = ['SVM', 'KNN', 'RandomForest', 'ExtraTrees', 'XGBoost', 'LightGBM', 'MLP', 'LR']
+models = okcomp.comp1.create_clf_model(model_names)
+model_names = list(models.keys())
+import seaborn as sns
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.metrics import accuracy_score, roc_auc_score
+
+# 随机使用n_trails次数据划分，找到最好的一次划分方法，并且保存在results中。
+results = okcomp.comp1.get_bst_split(X_data, y_data, models, test_size=0.2, metric_fn=roc_auc_score, n_trails=5, cv=True, random_state=0)
+_, (X_train_sel, X_test_sel, y_train_sel, y_test_sel) = results['results'][results['max_idx']]
+trails, _ = zip(*results['results'])
+cv_results = pd.DataFrame(trails, columns=model_names)
+# 可视化每个模型在不同的数据划分中的效果。
+sns.boxplot(data=cv_results)
+plt.ylabel('AUC %')
+plt.xlabel('Model Nmae')
+plt.savefig(f'img/Rad_model_cv.svg', bbox_inches = 'tight')
+import joblib
+from onekey_algo.custom.components.comp1 import plot_feature_importance, plot_learning_curve, smote_resample
+targets = []
+os.makedirs('models', exist_ok=True)
+for l in labels:
+    new_models = list(okcomp.comp1.create_clf_model_none_overfit(model_names).values())
+    for mn, m in zip(model_names, new_models):
+        X_train_smote, y_train_smote = X_train_sel, y_train_sel
+        # 取消下一行的注释可以使用Smote进行采样，解决样本不均衡的问题。
+#         X_train_smote, y_train_smote = smote_resample(X_train_sel, y_train_sel)
+        m.fit(X_train_smote, y_train_smote[l])
+        # 保存训练的模型
+        joblib.dump(m, f'models/{mn}_{l}.pkl') 
+        # 输出模型特征重要性，只针对高级树模型有用
+        plot_feature_importance(m, selected_features[0], save_dir='img')
+        
+#         plot_learning_curve(m, X_train_sel, y_train_sel, title=f'Learning Curve {mn}')
+#         plt.savefig(f"img/Rad_{mn}_learning_curve.svg", bbox_inches='tight')
+        plt.show()
+    targets.append(new_models)
+from sklearn.metrics import accuracy_score
+from sklearn.preprocessing import OneHotEncoder
+from onekey_algo.custom.components.delong import calc_95_CI
+from onekey_algo.custom.components.metrics import analysis_pred_binary
+
+predictions = [[(model.predict(X_train_sel), model.predict(X_test_sel)) 
+                for model in target] for label, target in zip(labels, targets)]
+pred_scores = [[(model.predict_proba(X_train_sel), model.predict_proba(X_test_sel)) 
+                for model in target] for label, target in zip(labels, targets)]
+
+metric = []
+pred_sel_idx = []
+for label, prediction, scores in zip(labels, predictions, pred_scores):
+    pred_sel_idx_label = []
+    for mname, (train_pred, test_pred), (train_score, test_score) in zip(model_names, prediction, scores):
+        # 计算训练集指数
+        acc, auc, ci, tpr, tnr, ppv, npv, precision, recall, f1, thres = analysis_pred_binary(y_train_sel[label], 
+                                                                                              train_score[:, 1])
+        ci = f"{ci[0]:.4f} - {ci[1]:.4f}"
+        metric.append((mname, acc, auc, ci, tpr, tnr, ppv, npv, precision, recall, f1, thres, f"{label}-train"))
+                 
+        # 计算验证集指标
+        acc, auc, ci, tpr, tnr, ppv, npv, precision, recall, f1, thres = analysis_pred_binary(y_test_sel[label], 
+                                                                                              test_score[:, 1])
+        ci = f"{ci[0]:.4f} - {ci[1]:.4f}"
+        metric.append((mname, acc, auc, ci, tpr, tnr, ppv, npv, precision, recall, f1, thres, f"{label}-test"))
+        # 计算thres对应的sel idx
+        pred_sel_idx_label.append(np.logical_or(test_score[:, 0] >= thres, test_score[:, 1] >= thres))
+    
+    pred_sel_idx.append(pred_sel_idx_label)
+metric = pd.DataFrame(metric, index=None, columns=['model_name', 'Accuracy', 'AUC', '95% CI',
+                                                   'Sensitivity', 'Specificity', 
+                                                   'PPV', 'NPV', 'Precision', 'Recall', 'F1',
+                                                   'Threshold', 'Task'])
+metric
+import seaborn as sns
+
+plt.figure(figsize=(10, 10))
+plt.subplot(211)
+sns.barplot(x='model_name', y='Accuracy', data=metric, hue='Task')
+plt.subplot(212)
+sns.lineplot(x='model_name', y='Accuracy', data=metric, hue='Task')
+plt.savefig(f'img/Rad_model_acc.svg', bbox_inches = 'tight')
+sel_model = model_names
+
+for sm in sel_model:
+    if sm in model_names:
+        sel_model_idx = model_names.index(sm)
+    
+        # Plot all ROC curves
+        plt.figure(figsize=(8, 8))
+        for pred_score, label in zip(pred_scores, labels):
+            okcomp.comp1.draw_roc([np.array(y_train_sel[label]), np.array(y_test_sel[label])], 
+                                  pred_score[sel_model_idx], 
+                                  labels=['Train', 'Test'], title=f"Model: {sm}")
+            plt.savefig(f'img/Rad_model_{sm}_roc.svg', bbox_inches = 'tight')
+sel_model = model_names
+
+for pred_score, label in zip(pred_scores, labels):
+    pred_test_scores = []
+    for sm in sel_model:
+        if sm in model_names:
+            sel_model_idx = model_names.index(sm)
+            pred_test_scores.append(pred_score[sel_model_idx][0])
+    okcomp.comp1.draw_roc([np.array(y_train_sel[label])] * len(pred_test_scores), 
+                          pred_test_scores, 
+                          labels=sel_model, title=f"Model AUC")
+    plt.savefig(f'img/model_roc_train.svg', bbox_inches = 'tight')
+    plt.show()
+
+for pred_score, label in zip(pred_scores, labels):
+    pred_test_scores = []
+    for sm in sel_model:
+        if sm in model_names:
+            sel_model_idx = model_names.index(sm)
+            pred_test_scores.append(pred_score[sel_model_idx][1])
+    okcomp.comp1.draw_roc([np.array(y_test_sel[label])] * len(pred_test_scores), 
+                          pred_test_scores, 
+                          labels=sel_model, title=f"Model AUC")
+    plt.savefig(f'img/model_roc_test.svg', bbox_inches = 'tight')
+from onekey_algo.custom.components.comp1 import plot_DCA
+
+for pred_score, label in zip(pred_scores, labels):
+    pred_test_scores = []
+    for sm in sel_model:
+        if sm in model_names:
+            sel_model_idx = model_names.index(sm)
+            okcomp.comp1.plot_DCA(pred_score[sel_model_idx][0][:,1], np.array(y_train_sel[label]),
+                                  title=f'Model {sm} DCA')
+            plt.savefig(f'img/model_{sm}_dca_train.svg', bbox_inches = 'tight')
+            plt.show()
+
+for pred_score, label in zip(pred_scores, labels):
+    pred_test_scores = []
+    for sm in sel_model:
+        if sm in model_names:
+            sel_model_idx = model_names.index(sm)
+            okcomp.comp1.plot_DCA(pred_score[sel_model_idx][1][:,1], np.array(y_test_sel[label]),
+                                  title=f'Model {sm} DCA')
+            plt.savefig(f'img/model_{sm}_dca_test.svg', bbox_inches = 'tight')
+# 设置绘制参数
+sel_model = model_names
+c_matrix = {}
+
+for sm in sel_model:
+    if sm in model_names:
+        sel_model_idx = model_names.index(sm)
+        for idx, label in enumerate(labels):
+            cm = okcomp.comp1.calc_confusion_matrix(predictions[idx][sel_model_idx][0], y_train_sel[label],
+#                                                     sel_idx = pred_sel_idx[idx][sel_model_idx],
+                                                    class_mapping={1:'1', 0:'0'}, num_classes=2)
+            c_matrix[label] = cm
+            plt.figure(figsize=(5, 4))
+            plt.title(f'Model:{sm}')
+            okcomp.comp1.draw_matrix(cm, norm=False, annot=True, cmap='Blues', fmt='.3g')
+            plt.savefig(f'img/model_{sm}_cm_train.svg', bbox_inches = 'tight')
+
+for sm in sel_model:
+    if sm in model_names:
+        sel_model_idx = model_names.index(sm)
+        for idx, label in enumerate(labels):
+            cm = okcomp.comp1.calc_confusion_matrix(predictions[idx][sel_model_idx][-1], y_test_sel[label],
+#                                                     sel_idx = pred_sel_idx[idx][sel_model_idx],
+                                                    class_mapping={1:'1', 0:'0'}, num_classes=2)
+            c_matrix[label] = cm
+            plt.figure(figsize=(5, 4))
+            plt.title(f'Model:{sm}')
+            okcomp.comp1.draw_matrix(cm, norm=False, annot=True, cmap='Blues', fmt='.3g')
+            plt.savefig(f'img/model_{sm}_cm_test.svg', bbox_inches = 'tight')
+sel_model = model_names
+c_matrix = {}
+
+for sm in sel_model:
+    if sm in model_names:
+        sel_model_idx = model_names.index(sm)
+        for idx, label in enumerate(labels):            
+            okcomp.comp1.draw_predict_score(pred_scores[idx][sel_model_idx][0], y_train_sel[label])
+            plt.title(f'{sm} sample predict score')
+            plt.legend(labels=["label=0","label=1"],loc="lower right") 
+            plt.savefig(f'img/model_{sm}_sample_dis_train.svg', bbox_inches = 'tight')
+            plt.show()
+
+for sm in sel_model:
+    if sm in model_names:
+        sel_model_idx = model_names.index(sm)
+        for idx, label in enumerate(labels):            
+            okcomp.comp1.draw_predict_score(pred_scores[idx][sel_model_idx][-1], y_test_sel[label])
+            plt.title(f'{sm} sample predict score')
+            plt.legend(labels=["label=0","label=1"],loc="lower right") 
+            plt.savefig(f'img/model_{sm}_sample_dis_test.svg', bbox_inches = 'tight')
+            plt.show()
